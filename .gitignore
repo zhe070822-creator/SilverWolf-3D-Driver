@@ -1,13 +1,15 @@
 node_modules/
 dist/
 
-# Official PMX model - redistribution prohibited
-Star Rail Silver Wolf Official Model/
+# Tauri build artifacts
+src-tauri/target/
 
 # Temporary files
 *.mjs
 !vite.config.js
-check*.png
-test*.png
-screenshot*.png
-pose*.png
+*.png
+!SilverWolf/**/*.png
+
+# Installer (too large for git, use releases)
+SilverWolf-3D-Driver-Setup.exe
+*.msi

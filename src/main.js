@@ -124,14 +124,15 @@ renderer.domElement.addEventListener('click', () => {
 });
 
 // ── Lighting ─────────────────────────────────────────────────
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const key = new THREE.DirectionalLight(0xffffff, 2.5);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+const key = new THREE.DirectionalLight(0xffffff, 1.5);
 key.position.set(5, 8, 5);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0x8899cc, 0.8);
+const fill = new THREE.DirectionalLight(0x8899cc, 0.5);
 fill.position.set(-3, 2, -3);
 scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffccaa, 1.2);
+const rim = new THREE.DirectionalLight(0xffccaa, 0.8);
 rim.position.set(0, 0.5, -5);
 scene.add(rim);
 
@@ -169,33 +170,64 @@ loader.load(
     controls.target.copy(camTarget);
     camera.position.copy(camTarget).add(camOffset);
     controls.update();
-    // Apply cel-shading with toon ramp textures
-    const texLoader = new THREE.TextureLoader();
-    const toonRamp = texLoader.load('/SilverWolf/textures/toon_ramp1.png');
-    toonRamp.minFilter = THREE.NearestFilter;
-    toonRamp.magFilter = THREE.NearestFilter;
-
+    // Convert unlit materials to standard (responds to lighting)
     gltf.scene.traverse((child) => {
       if (child.isMesh && child.material) {
         const mats = Array.isArray(child.material) ? child.material : [child.material];
         mats.forEach((mat, i) => {
-          if (mat.isMeshStandardMaterial || mat.isMeshPhongMaterial || mat.isMeshBasicMaterial) {
-            const oldMap = mat.map;
-            const newMat = new THREE.MeshToonMaterial({
-              map: oldMap,
-              gradientMap: toonRamp,
+          if (mat.isMeshBasicMaterial && !mat.userData._converted) {
+            const newMat = new THREE.MeshStandardMaterial({
+              map: mat.map,
               color: mat.color || new THREE.Color(1, 1, 1),
+              roughness: 0.7,
+              metalness: 0.0,
             });
-            if (Array.isArray(child.material)) {
-              child.material[i] = newMat;
-            } else {
-              child.material = newMat;
-            }
+            newMat.userData._converted = true;
+            if (Array.isArray(child.material)) child.material[i] = newMat;
+            else child.material = newMat;
           }
         });
       }
     });
-    console.log('[SilverWolf] Cel-shading applied');
+    console.log('[SilverWolf] Materials converted to Standard');
+
+    // Enable shadows on model
+    modelGroup.traverse(c => {
+      if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+    });
+
+    // Load weapon
+    loader.load('/SilverWolf/weapon/weapon.gltf', (weaponGltf) => {
+      const weapon = weaponGltf.scene;
+      weapon.scale.set(0.08, 0.08, 0.08);
+      // Convert to standard material
+      weapon.traverse(c => {
+        if (c.isMesh && c.material) {
+          const mats = Array.isArray(c.material) ? c.material : [c.material];
+          mats.forEach((mat, i) => {
+            if (mat.isMeshBasicMaterial) {
+              const nm = new THREE.MeshStandardMaterial({
+                map: mat.map, color: mat.color || new THREE.Color(1,1,1),
+                roughness: 0.5, metalness: 0.3
+              });
+              if (Array.isArray(c.material)) c.material[i] = nm;
+              else c.material = nm;
+            }
+          });
+        }
+        if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+      });
+      // Attach to right hand
+      const rightHand = boneMap.get('Right_wrist_063');
+      if (rightHand) {
+        rightHand.add(weapon);
+        weapon.position.set(0, -0.05, 0.05);
+      } else {
+        weapon.position.set(0.3, 0.8, 0.2);
+        modelGroup.add(weapon);
+      }
+      console.log('[SilverWolf] Weapon attached');
+    });
 
     window.__modelGroup = modelGroup;
     window.__camera = camera;
@@ -537,6 +569,95 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
+
+// ── Lighting System ────────────────────────────────────────────
+const lights = [];
+const lightGizmos = new THREE.Group();
+scene.add(lightGizmos);
+const gizmoGeo = new THREE.SphereGeometry(0.04, 16, 16);
+
+function addPointLight(x, y, z) {
+  const light = new THREE.PointLight(0xffeedd, 30, 8, 1);
+  light.position.set(x, y || 2, z || 0);
+  light.castShadow = true;
+  light.shadow.mapSize.set(512, 512);
+  light.shadow.camera.near = 0.1;
+  light.shadow.camera.far = 20;
+  light.shadow.bias = -0.002;
+  scene.add(light);
+
+  const gizmo = new THREE.Mesh(gizmoGeo, new THREE.MeshBasicMaterial({ color: 0xffdd44, depthTest: false }));
+  gizmo.position.copy(light.position);
+  lightGizmos.add(gizmo);
+
+  lights.push({ light, gizmo });
+  updateLightList();
+  return { light, gizmo };
+}
+
+function removeLight(index) {
+  if (lights.length <= 1) return;
+  const { light, gizmo } = lights[index];
+  scene.remove(light);
+  lightGizmos.remove(gizmo);
+  if (gizmo.material) gizmo.material.dispose();
+  lights.splice(index, 1);
+  updateLightList();
+}
+
+function updateLightList() {
+  const container = document.getElementById('lightList');
+  if (!container) return;
+  container.innerHTML = lights.map((l, i) => `
+    <div style="margin:4px 0;padding:3px 0;border-top:1px solid #444;">
+      <div style="display:flex;align-items:center;gap:2px;">
+        <span style="color:#f39c12;">●</span>
+        <span style="color:#ccc;font-size:9px;">光源${i+1}</span>
+        ${lights.length > 1 ? `<button style="font-size:8px;padding:0 3px;background:#666;margin-left:auto;" onclick="window.__removeLight(${i})">✕</button>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:2px;font-size:9px;">
+        <span style="color:#999;width:20px;">强</span>
+        <input type="range" min="1" max="150" value="${Math.round(l.light.intensity)}" style="flex:1;accent-color:#f39c12;"
+          oninput="window.__setLightProp(${i},'intensity',+this.value);this.nextElementSibling.textContent=this.value">
+        <span style="color:#999;width:26px;">${Math.round(l.light.intensity)}</span>
+      </div>
+      ${['x','y','z'].map(axis => `
+      <div style="display:flex;align-items:center;gap:2px;font-size:9px;">
+        <span style="color:#999;width:20px;">${axis.toUpperCase()}</span>
+        <input type="range" min="-3" max="3" step="0.05" value="${l.light.position[axis].toFixed(2)}" style="flex:1;accent-color:#f39c12;"
+          oninput="window.__setLightProp(${i},'${axis}',+this.value);this.nextElementSibling.textContent=parseFloat(this.value).toFixed(2)">
+        <span style="color:#999;width:34px;">${l.light.position[axis].toFixed(2)}</span>
+      </div>`).join('')}
+    </div>
+  `).join('');
+}
+
+window.__setLightProp = (i, prop, v) => {
+  if (!lights[i]) return;
+  if (prop === 'intensity') {
+    lights[i].light.intensity = v;
+  } else {
+    lights[i].light.position[prop] = v;
+    lights[i].gizmo.position[prop] = v;
+  }
+};
+window.__addLight = () => addPointLight(0, 2, 1);
+window.__removeLight = (i) => removeLight(i);
+
+// Wire up ambient light slider
+document.getElementById('ambientSlider').oninput = function() {
+  ambientLight.intensity = parseFloat(this.value);
+  document.getElementById('ambientVal').textContent = this.value;
+};
+
+// Wire addLightBtn
+document.getElementById('addLightBtn').onclick = () => window.__addLight();
+
+// Show light panel on load
+document.getElementById('lightPanel').style.display = '';
+
+console.log('[Light] System ready with shadows');
+// ────────────────────────────────────────────────────────────────
 
 animate();
 console.log('[SilverWolf] App started. Open DevTools console for logs.');
