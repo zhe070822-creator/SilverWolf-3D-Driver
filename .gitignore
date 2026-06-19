@@ -1,0 +1,13 @@
+node_modules/
+dist/
+
+# Official PMX model - redistribution prohibited
+Star Rail Silver Wolf Official Model/
+
+# Temporary files
+*.mjs
+!vite.config.js
+check*.png
+test*.png
+screenshot*.png
+pose*.png
